@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Formularioak - Trazabilitatea</title>
+    <!-- Load ethers.js v6 library from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.umd.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .status-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        .status-message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .status-info {
+            background-color: #e7f3ff;
+            color: #004085;
+        }
+        .status-success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status-error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .input-section {
+            margin-bottom: 30px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .table-container {
+            margin-top: 30px;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+            font-weight: bold;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .event-created {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .event-updated {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .tx-hash {
+            font-family: monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        .no-events {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Formularioak - Trazabilitatea</h1>
+        
+        <!-- Connection Status Section -->
+        <div class="status-section">
+            <h2>Connection Status</h2>
+            <div id="connectionStatus">
+                <div class="status-message status-info">Connecting to Web3 provider...</div>
+            </div>
+        </div>
+
+        <!-- Input Section -->
+        <div class="input-section">
+            <h2>Retrieve Form History</h2>
+            <div class="input-group">
+                <label for="contractAddress">Contract Address:</label>
+                <input type="text" id="contractAddress" placeholder="0x..." />
+            </div>
+            <div class="input-group">
+                <label for="formNumber">Form Number (zenbakia):</label>
+                <input type="number" id="formNumber" placeholder="Enter form number" min="1" />
+            </div>
+            <button id="retrieveButton" onclick="retrieveEvents()" disabled>Retrieve Events</button>
+        </div>
+
+        <!-- Results Table -->
+        <div class="table-container" id="resultsContainer" style="display: none;">
+            <h2>Form History</h2>
+            <table id="eventsTable">
+                <thead>
+                    <tr>
+                        <th>Event Type</th>
+                        <th>Block Number</th>
+                        <th>Transaction Hash</th>
+                        <th>datu1</th>
+                        <th>datu2</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody id="eventsTableBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Hardcoded IP list from hedatu_erabili.py
+        const IP_LIST = ["85.190.243.52"];
+        const PORT = 8545;
+        
+        let provider = null;
+        let contract = null;
+        const CONTRACT_ABI = [
+            {
+                "anonymous": false,
+                "inputs": [
+                    {
+                        "indexed": true,
+                        "internalType": "uint256",
+                        "name": "zenbakia",
+                        "type": "uint256"
+                    },
+                    {
+                        "indexed": false,
+                        "internalType": "string",
+                        "name": "datu1",
+                        "type": "string"
+                    },
+                    {
+                        "indexed": false,
+                        "internalType": "string",
+                        "name": "datu2",
+                        "type": "string"
+                    }
+                ],
+                "name": "FormCreated",
+                "type": "event"
+            },
+            {
+                "anonymous": false,
+                "inputs": [
+                    {
+                        "indexed": true,
+                        "internalType": "uint256",
+                        "name": "zenbakia",
+                        "type": "uint256"
+                    },
+                    {
+                        "indexed": false,
+                        "internalType": "string",
+                        "name": "datu1",
+                        "type": "string"
+                    },
+                    {
+                        "indexed": false,
+                        "internalType": "string",
+                        "name": "datu2",
+                        "type": "string"
+                    }
+                ],
+                "name": "FormUpdated",
+                "type": "event"
+            }
+        ];
+
+        // Function to update connection status display
+        function updateConnectionStatus(message, type) {
+            const statusDiv = document.getElementById('connectionStatus');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `status-message status-${type}`;
+            messageDiv.textContent = message;
+            statusDiv.appendChild(messageDiv);
+        }
+
+        // Function to try connecting to Web3 providers
+        async function connectToProvider() {
+            const statusDiv = document.getElementById('connectionStatus');
+            statusDiv.innerHTML = '<div class="status-message status-info">Connecting to Web3 provider...</div>';
+            
+            for (const ip of IP_LIST) {
+                const providerUrl = `http://${ip}:${PORT}`;
+                updateConnectionStatus(`Trying to connect to ${providerUrl}...`, 'info');
+                
+                try {
+                    // Create a new provider instance (ethers v6 syntax)
+                    const testProvider = new ethers.JsonRpcProvider(providerUrl);
+                    
+                    // Test the connection by getting the block number
+                    const blockNumber = await testProvider.getBlockNumber();
+                    
+                    // If successful, set the provider
+                    provider = testProvider;
+                    updateConnectionStatus(`✓ Successfully connected to ${providerUrl} (Block: ${blockNumber})`, 'success');
+                    document.getElementById('retrieveButton').disabled = false;
+                    return;
+                } catch (error) {
+                    updateConnectionStatus(`✗ Connection to ${providerUrl} failed: ${error.message}`, 'error');
+                }
+            }
+            
+            updateConnectionStatus('✗ Failed to connect to any provider in the IP list', 'error');
+        }
+
+        // Function to find the contract deployment block using binary search
+        async function findDeploymentBlock(contractAddress, latestBlock) {
+            // Check if contract exists at latest block
+            const codeAtLatest = await provider.getCode(contractAddress, latestBlock);
+            if (!codeAtLatest || codeAtLatest === '0x') {
+                throw new Error('Contract does not exist at latest block');
+            }
+            
+            // Binary search to find the deployment block
+            let low = 0;
+            let high = latestBlock;
+            let deploymentBlock = latestBlock;
+            
+            // Update UI during search
+            const tableBody = document.getElementById('eventsTableBody');
+            
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                tableBody.innerHTML = `<tr><td colspan="6" class="loading">Finding deployment block... checking block ${mid}</td></tr>`;
+                
+                const codeAtMid = await provider.getCode(contractAddress, mid);
+                
+                if (codeAtMid && codeAtMid !== '0x') {
+                    // Contract exists at this block, search earlier
+                    deploymentBlock = mid;
+                    high = mid - 1;
+                } else {
+                    // Contract doesn't exist at this block, search later
+                    low = mid + 1;
+                }
+            }
+            
+            return deploymentBlock;
+        }
+
+        // Function to find the first FormCreated event (optimization: stop once found)
+        async function findFirstFormCreatedEvent(contract, formCreatedFilter, fromBlock, toBlock) {
+            // Try direct query first
+            try {
+                const events = await contract.queryFilter(formCreatedFilter, fromBlock, toBlock);
+                // Return the first event if found, or null if not found
+                return events.length > 0 ? events[0] : null;
+            } catch (error) {
+                // If range limit error, use batching but stop after first result
+                if (error.message && (error.message.includes('range limit') || error.message.includes('exceeds maximum'))) {
+                    let batchSize = 10000;
+                    let currentFrom = fromBlock;
+                    
+                    while (currentFrom <= toBlock) {
+                        const currentTo = Math.min(currentFrom + batchSize - 1, toBlock);
+                        const tableBody = document.getElementById('eventsTableBody');
+                        const progress = Math.min(100, Math.round(((currentTo - fromBlock) / (toBlock - fromBlock)) * 100));
+                        tableBody.innerHTML = `<tr><td colspan="6" class="loading">Searching for form creation... ${progress}% (blocks ${currentFrom}-${currentTo})</td></tr>`;
+                        
+                        try {
+                            const batchEvents = await contract.queryFilter(formCreatedFilter, currentFrom, currentTo);
+                            if (batchEvents.length > 0) {
+                                // Found it! Return the first event
+                                return batchEvents[0];
+                            }
+                            currentFrom = currentTo + 1;
+                        } catch (batchError) {
+                            // If batch size is too large, reduce and retry same batch
+                            if (batchError.message && (batchError.message.includes('range limit') || batchError.message.includes('exceeds maximum'))) {
+                                if (batchSize > 1000) {
+                                    // Reduce batch size and retry the same range
+                                    batchSize = Math.floor(batchSize / 2);
+                                    continue; // Don't advance currentFrom, retry with smaller batch
+                                } else {
+                                    throw new Error(`RPC range limit too restrictive. Tried batch size ${batchSize} blocks.`);
+                                }
+                            }
+                            throw batchError;
+                        }
+                    }
+                    return null; // Not found
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+        // Function to query events in batches to avoid RPC range limit
+        async function queryEventsInBatches(contract, filter, fromBlock, toBlock, batchSize = 10000) {
+            const allEvents = [];
+            let currentFrom = fromBlock;
+            
+            // Query events in batches
+            while (currentFrom <= toBlock) {
+                const currentTo = Math.min(currentFrom + batchSize - 1, toBlock);
+                
+                try {
+                    // Query events for this batch
+                    const batchEvents = await contract.queryFilter(filter, currentFrom, currentTo);
+                    allEvents.push(...batchEvents);
+                    
+                    // Update progress in the UI
+                    const tableBody = document.getElementById('eventsTableBody');
+                    const progress = Math.min(100, Math.round(((currentTo - fromBlock) / (toBlock - fromBlock)) * 100));
+                    tableBody.innerHTML = `<tr><td colspan="6" class="loading">Retrieving events... ${progress}% (blocks ${currentFrom}-${currentTo} of ${toBlock})</td></tr>`;
+                    
+                    // Move to next batch
+                    currentFrom = currentTo + 1;
+                } catch (error) {
+                    // If batch size is too large, try smaller batches
+                    if (error.message && error.message.includes('range limit')) {
+                        if (batchSize > 1000) {
+                            // Reduce batch size and retry
+                            batchSize = Math.floor(batchSize / 2);
+                            continue;
+                        } else {
+                            throw new Error(`RPC range limit too restrictive. Tried batch size ${batchSize} blocks.`);
+                        }
+                    }
+                    throw error;
+                }
+            }
+            
+            return allEvents;
+        }
+
+        // Function to retrieve and display events
+        async function retrieveEvents() {
+            const contractAddress = document.getElementById('contractAddress').value.trim();
+            const formNumber = document.getElementById('formNumber').value;
+            
+            // Validate inputs
+            if (!contractAddress) {
+                alert('Please enter a contract address');
+                return;
+            }
+            
+            if (!formNumber || formNumber <= 0) {
+                alert('Please enter a valid form number (greater than 0)');
+                return;
+            }
+            
+            if (!provider) {
+                alert('Not connected to a Web3 provider. Please wait for connection.');
+                return;
+            }
+            
+            // Disable button during retrieval
+            const button = document.getElementById('retrieveButton');
+            button.disabled = true;
+            button.textContent = 'Retrieving...';
+            
+            // Show loading state
+            const resultsContainer = document.getElementById('resultsContainer');
+            resultsContainer.style.display = 'block';
+            const tableBody = document.getElementById('eventsTableBody');
+            tableBody.innerHTML = '<tr><td colspan="6" class="loading">Retrieving events...</td></tr>';
+            
+            try {
+                // Create contract instance
+                contract = new ethers.Contract(contractAddress, CONTRACT_ABI, provider);
+                
+                // Get the latest block number
+                const latestBlock = await provider.getBlockNumber();
+                
+                // Find the contract deployment block to optimize search
+                tableBody.innerHTML = '<tr><td colspan="6" class="loading">Finding contract deployment block...</td></tr>';
+                const deploymentBlock = await findDeploymentBlock(contractAddress, latestBlock);
+                tableBody.innerHTML = `<tr><td colspan="6" class="loading">Contract deployed at block ${deploymentBlock}. Querying events from block ${deploymentBlock}...</td></tr>`;
+                
+                // Create filters for events
+                const formCreatedFilter = contract.filters.FormCreated(parseInt(formNumber));
+                const formUpdatedFilter = contract.filters.FormUpdated(parseInt(formNumber));
+                
+                // Optimization: Find the first FormCreated event (only one exists per form)
+                tableBody.innerHTML = '<tr><td colspan="6" class="loading">Searching for form creation event...</td></tr>';
+                const firstFormCreatedEvent = await findFirstFormCreatedEvent(contract, formCreatedFilter, deploymentBlock, latestBlock);
+                
+                if (!firstFormCreatedEvent) {
+                    tableBody.innerHTML = '<tr><td colspan="6" class="no-events">Form not found. No FormCreated event exists for this form number.</td></tr>';
+                    button.disabled = false;
+                    button.textContent = 'Retrieve Events';
+                    return;
+                }
+                
+                // Use the FormCreated block as the starting point for FormUpdated search
+                // (updates can only happen after creation)
+                const creationBlock = firstFormCreatedEvent.blockNumber;
+                const formCreatedEvents = [firstFormCreatedEvent];
+                
+                // Now search for FormUpdated events starting from the creation block
+                tableBody.innerHTML = '<tr><td colspan="6" class="loading">Querying FormUpdated events (from creation block)...</td></tr>';
+                let formUpdatedEvents;
+                try {
+                    formUpdatedEvents = await contract.queryFilter(formUpdatedFilter, creationBlock, latestBlock);
+                } catch (error) {
+                    // If direct query fails due to range limit, use batching as fallback
+                    if (error.message && (error.message.includes('range limit') || error.message.includes('exceeds maximum'))) {
+                        tableBody.innerHTML = '<tr><td colspan="6" class="loading">Range too large, querying updates in batches...</td></tr>';
+                        formUpdatedEvents = await queryEventsInBatches(contract, formUpdatedFilter, creationBlock, latestBlock);
+                    } else {
+                        // Re-throw other errors
+                        throw error;
+                    }
+                }
+                
+                // Combine and process events
+                const allEvents = [];
+                
+                // Collect all unique block numbers to fetch timestamps efficiently
+                const blockNumbers = new Set();
+                formCreatedEvents.forEach(event => blockNumbers.add(event.blockNumber));
+                formUpdatedEvents.forEach(event => blockNumbers.add(event.blockNumber));
+                
+                // Fetch all block timestamps in parallel
+                tableBody.innerHTML = '<tr><td colspan="6" class="loading">Fetching block timestamps...</td></tr>';
+                const blockPromises = Array.from(blockNumbers).map(blockNum => 
+                    provider.getBlock(blockNum).then(block => [blockNum, block.timestamp])
+                );
+                const blockData = await Promise.all(blockPromises);
+                const blockTimestampMap = new Map(blockData);
+                
+                // Process FormCreated events
+                for (const event of formCreatedEvents) {
+                    allEvents.push({
+                        type: 'FormCreated',
+                        blockNumber: event.blockNumber,
+                        transactionHash: event.transactionHash,
+                        datu1: event.args.datu1,
+                        datu2: event.args.datu2,
+                        timestamp: blockTimestampMap.get(event.blockNumber)
+                    });
+                }
+                
+                // Process FormUpdated events
+                for (const event of formUpdatedEvents) {
+                    allEvents.push({
+                        type: 'FormUpdated',
+                        blockNumber: event.blockNumber,
+                        transactionHash: event.transactionHash,
+                        datu1: event.args.datu1,
+                        datu2: event.args.datu2,
+                        timestamp: blockTimestampMap.get(event.blockNumber)
+                    });
+                }
+                
+                // Sort events by block number (chronologically)
+                allEvents.sort((a, b) => a.blockNumber - b.blockNumber);
+                
+                // Display events in table
+                displayEvents(allEvents);
+                
+            } catch (error) {
+                tableBody.innerHTML = `<tr><td colspan="6" class="status-error">Error retrieving events: ${error.message}</td></tr>`;
+                console.error('Error retrieving events:', error);
+            } finally {
+                // Re-enable button
+                button.disabled = false;
+                button.textContent = 'Retrieve Events';
+            }
+        }
+
+        // Function to display events in the table
+        function displayEvents(events) {
+            const tableBody = document.getElementById('eventsTableBody');
+            
+            if (events.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="6" class="no-events">No events found for this form number</td></tr>';
+                return;
+            }
+            
+            tableBody.innerHTML = '';
+            
+            events.forEach(event => {
+                const row = document.createElement('tr');
+                
+                // Event type cell with styling
+                const typeCell = document.createElement('td');
+                typeCell.className = event.type === 'FormCreated' ? 'event-created' : 'event-updated';
+                typeCell.textContent = event.type;
+                
+                // Block number cell
+                const blockCell = document.createElement('td');
+                blockCell.textContent = event.blockNumber;
+                
+                // Transaction hash cell
+                const txCell = document.createElement('td');
+                txCell.className = 'tx-hash';
+                txCell.textContent = event.transactionHash;
+                
+                // datu1 cell
+                const datu1Cell = document.createElement('td');
+                datu1Cell.textContent = event.datu1;
+                
+                // datu2 cell
+                const datu2Cell = document.createElement('td');
+                datu2Cell.textContent = event.datu2;
+                
+                // Timestamp cell
+                const timestampCell = document.createElement('td');
+                if (event.timestamp) {
+                    const date = new Date(event.timestamp * 1000);
+                    timestampCell.textContent = date.toLocaleString();
+                } else {
+                    timestampCell.textContent = 'N/A';
+                }
+                
+                // Append cells to row
+                row.appendChild(typeCell);
+                row.appendChild(blockCell);
+                row.appendChild(txCell);
+                row.appendChild(datu1Cell);
+                row.appendChild(datu2Cell);
+                row.appendChild(timestampCell);
+                
+                // Append row to table
+                tableBody.appendChild(row);
+            });
+        }
+
+        // Initialize connection when page loads
+        window.addEventListener('load', () => {
+            connectToProvider();
+        });
+
+        // Allow Enter key to trigger retrieval
+        document.getElementById('formNumber').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                retrieveEvents();
+            }
+        });
+        
+        document.getElementById('contractAddress').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                retrieveEvents();
+            }
+        });
+    </script>
+</body>
+</html>
+
