@@ -210,35 +210,37 @@ def deploy_contract(w3, account, bytecode, abi):
     
     return deployed_contract, contract_address
 
-def interact_with_contract(w3, account, contract):
+def send_transaction(w3, account, contract, function_call, description):
     """
-    Interact with the deployed contract by creating a form and retrieving it.
+    Generic function to send a transaction to the contract.
+    Args:
+        w3: Web3 instance
+        account: Account object
+        contract: Contract instance
+        function_call: The contract function call (e.g., contract.functions.createForm(...))
+        description: Description of what the transaction does
+    Returns:
+        Transaction receipt
     """
-    # Sample data for the form
-    sample_datu1 = "Sample Data 1"
-    sample_datu2 = "Sample Data 2"
-    
-    print(f"\nCreating form with sample data...")
-    print(f"  datu1: {sample_datu1}")
-    print(f"  datu2: {sample_datu2}")
+    print(f"\n{description}...")
     
     # Get the nonce for the account
     nonce = w3.eth.get_transaction_count(account.address)
     
-    # Get chainId from network (consistent with deployment)
+    # Get chainId from network
     try:
         chain_id = w3.eth.chain_id
     except Exception as e:
         print(f"  Warning: Could not get chainId from network: {e}")
         chain_id = 1337  # Default for private networks
     
-    # Build the transaction to call createForm
-    transaction = contract.functions.createForm(sample_datu1, sample_datu2).build_transaction({
+    # Build the transaction
+    transaction = function_call.build_transaction({
         "from": account.address,
         "nonce": nonce,
-        "gas": 0x7FFFFFFF, # Max gas limit for function calls
+        "gas": 0x7FFFFFFF,  # Max gas limit for function calls
         "gasPrice": 0,      # Zero gas for private Besu network
-        "chainId": chain_id, # Use the same chainId as deployment
+        "chainId": chain_id,
     })
     
     # Sign the transaction
@@ -250,67 +252,149 @@ def interact_with_contract(w3, account, contract):
     
     # Wait for transaction confirmation
     print(f"  Waiting for transaction confirmation...")
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
     print(f"  Transaction confirmed in block: {tx_receipt.blockNumber}")
     
     # Check if transaction was successful
     if tx_receipt.status != 1:
-        raise Exception(f"createForm transaction failed with status: {tx_receipt.status}")
+        raise Exception(f"Transaction failed with status: {tx_receipt.status}")
     print(f"  Transaction status: Success")
     
-    # Verify the form was created by checking the form count
-    print(f"\nVerifying form creation...")
-    form_count = contract.functions.getFormCount().call()
-    print(f"  Total forms created: {form_count}")
+    return tx_receipt
+
+def create_form(w3, account, contract, datu1, datu2):
+    """
+    Create a new form using the createForm function.
+    Returns tuple (transaction_receipt, form_number).
+    The form_number is the zenbakia assigned to the newly created form.
+    Extracts the form number from the FormCreated event in the transaction receipt.
+    """
+    function_call = contract.functions.createForm(datu1, datu2)
+    receipt = send_transaction(w3, account, contract, function_call, f"Creating form with datu1='{datu1}', datu2='{datu2}'")
     
-    if form_count == 0:
-        raise Exception("Form was not created - form count is 0")
+    # Extract the form number (zenbakia) from the FormCreated event
+    # The event is emitted with the formCount as zenbakia
+    form_number = None
+    for log in receipt['logs']:
+        try:
+            # Try to decode the log as a FormCreated event
+            decoded_event = contract.events.FormCreated().process_log(log)
+            form_number = decoded_event['args']['zenbakia']
+            print(f"  Form created with zenbakia: {form_number}")
+            break
+        except:
+            # Not a FormCreated event, continue
+            continue
     
-    # Call getForm to retrieve the form data
-    # Use form_count as the form number since that's the latest form created
-    print(f"\nRetrieving form data (zenbakia = {form_count})...")
-        
+    if form_number is None:
+        raise Exception("Could not extract form number from FormCreated event")
+    
+    return receipt, form_number
+
+def update_form(w3, account, contract, zenbakia, datu1, datu2):
+    """
+    Update an existing form using the updateForm function.
+    Returns the transaction receipt.
+    """
+    function_call = contract.functions.updateForm(zenbakia, datu1, datu2)
+    return send_transaction(w3, account, contract, function_call, f"Updating form {zenbakia} with datu1='{datu1}', datu2='{datu2}'")
+
+def get_form(contract, zenbakia):
+    """
+    Retrieve form data using the getForm function (view function, no transaction needed).
+    Returns tuple (datu1, datu2).
+    """
+    print(f"\nRetrieving form data (zenbakia = {zenbakia})...")
     try:
-        # Try to call getForm with the form number that should exist (form_count)
-        form_number = form_count
-        print(f"  Attempting to retrieve form number {form_number}...")
-        form_data = contract.functions.getForm(form_number).call()
-        
-        print(f"\nRetrieved form data:")
-        print(f"  datu1: {form_data[0]}")
-        print(f"  datu2: {form_data[1]}")
-        
+        form_data = contract.functions.getForm(zenbakia).call()
+        print(f"  Retrieved form data:")
+        print(f"    datu1: {form_data[0]}")
+        print(f"    datu2: {form_data[1]}")
+        return form_data
     except Exception as e:
-        error_msg = str(e)
-        print(f"  Error calling getForm: {error_msg}")
-        
-        # If the error is about insufficient data, the form might not exist
-        # or the contract call might have reverted
-        if "InsufficientDataBytes" in error_msg or "BadFunctionCallOutput" in error_msg:
-            print(f"  This usually means the form doesn't exist or the call reverted.")
-            print(f"  Attempting to check form existence by trying different form numbers...")
-            
-            # Try each form number from 1 to form_count
-            form_data = None
-            for i in range(1, form_count + 1):
-                try:
-                    print(f"  Trying form number {i}...")
-                    form_data = contract.functions.getForm(i).call()
-                    print(f"  Successfully retrieved form {i}!")
-                    print(f"\nRetrieved form data:")
-                    print(f"  datu1: {form_data[0]}")
-                    print(f"  datu2: {form_data[1]}")
-                    break
-                except Exception as inner_e:
-                    print(f"  Form {i} not found: {str(inner_e)}")
-                    continue
-            
-            if form_data is None:
-                raise Exception(f"Could not retrieve any form data. Form count is {form_count}, but no forms could be retrieved. This might indicate a contract state issue.")
-        else:
-            raise Exception(f"Could not retrieve form data: {error_msg}")
+        raise Exception(f"Could not retrieve form {zenbakia}: {str(e)}")
+
+def get_events(w3, contract, contract_address, zenbakia, from_block=0):
+    """
+    Retrieve FormCreated and FormUpdated events from the blockchain for a specific form.
+    Uses the indexed zenbakia field to filter events efficiently.
+    Args:
+        w3: Web3 instance
+        contract: Contract instance
+        contract_address: Contract address
+        zenbakia: Form number to filter events by (indexed field)
+        from_block: Starting block number to search from
+    Returns:
+        Tuple of (form_created_events, form_updated_events) lists
+    """
+    print(f"\nRetrieving events for form zenbakia={zenbakia} from block {from_block}...")
     
-    return form_data
+    # Get the latest block number
+    latest_block = w3.eth.block_number
+    print(f"  Searching from block {from_block} to block {latest_block}")
+    
+    try:
+        # Use argument_filters to filter by the indexed zenbakia field
+        # This is more efficient than retrieving all events and filtering in Python
+        argument_filters = {'zenbakia': zenbakia}
+        
+        # Get FormCreated events filtered by zenbakia
+        # Note: web3.py uses snake_case for parameters (from_block, to_block)
+        form_created_events = contract.events.FormCreated.get_logs(
+            from_block=from_block, 
+            to_block=latest_block,
+            argument_filters=argument_filters
+        )
+        
+        # Get FormUpdated events filtered by zenbakia
+        form_updated_events = contract.events.FormUpdated.get_logs(
+            from_block=from_block, 
+            to_block=latest_block,
+            argument_filters=argument_filters
+        )
+        
+        print(f"  Found {len(form_created_events)} FormCreated events for form {zenbakia}")
+        print(f"  Found {len(form_updated_events)} FormUpdated events for form {zenbakia}")
+        
+        return form_created_events, form_updated_events
+    except Exception as e:
+        print(f"  Error retrieving events: {e}")
+        # Return empty lists if event retrieval fails
+        return [], []
+
+def display_events(form_created_events, form_updated_events):
+    """
+    Display the retrieved events in a formatted way.
+    """
+    print(f"\n{'='*60}")
+    print(f"EVENT LOGS")
+    print(f"{'='*60}")
+    
+    if form_created_events:
+        print(f"\nFormCreated Events:")
+        for i, event in enumerate(form_created_events, 1):
+            print(f"  Event {i}:")
+            print(f"    Block: {event.blockNumber}")
+            print(f"    Transaction: {event.transactionHash.hex()}")
+            print(f"    zenbakia: {event.args.zenbakia}")
+            print(f"    datu1: {event.args.datu1}")
+            print(f"    datu2: {event.args.datu2}")
+    else:
+        print(f"\nNo FormCreated events found")
+    
+    if form_updated_events:
+        print(f"\nFormUpdated Events:")
+        for i, event in enumerate(form_updated_events, 1):
+            print(f"  Event {i}:")
+            print(f"    Block: {event.blockNumber}")
+            print(f"    Transaction: {event.transactionHash.hex()}")
+            print(f"    zenbakia: {event.args.zenbakia}")
+            print(f"    datu1: {event.args.datu1}")
+            print(f"    datu2: {event.args.datu2}")
+    else:
+        print(f"\nNo FormUpdated events found")
+    
+    print(f"{'='*60}")
 
 def main():
     """
@@ -329,8 +413,29 @@ def main():
         # Step 4: Deploy the contract
         contract, contract_address = deploy_contract(w3, account, bytecode, abi)
         
-        # Step 5: Interact with the contract
-        form_data = interact_with_contract(w3, account, contract)
+        # Get the block number after deployment to filter events later
+        deployment_block = w3.eth.block_number
+        
+        # Step 5: Create a form
+        create_receipt, form_zenbakia = create_form(w3, account, contract, "Sample Data 1", "Sample Data 2")
+        print(f"  Total forms: {form_zenbakia}")
+        
+        # Step 6: Get the form data using the returned form number
+        form_data = get_form(contract, form_zenbakia)
+        
+        # Step 7: Update the form (first time)
+        update_form(w3, account, contract, form_zenbakia, "Updated Data 1", "Updated Data 2")
+        
+        # Step 8: Update the form (second time)
+        update_form(w3, account, contract, form_zenbakia, "Final Data 1", "Final Data 2")
+        
+        # Step 9: Retrieve and display events for the form we created
+        form_created_events, form_updated_events = get_events(
+            w3, contract, contract_address, 
+            zenbakia=form_zenbakia, 
+            from_block=deployment_block
+        )
+        display_events(form_created_events, form_updated_events)
         
         print(f"\n[SUCCESS] All operations completed successfully!")
         

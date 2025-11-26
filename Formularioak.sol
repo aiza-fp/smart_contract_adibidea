@@ -30,10 +30,11 @@ contract Formularioak {
         _;
     }
 
-    function createForm(string memory _datu1, string memory _datu2) public onlyOwner {        
+    function createForm(string memory _datu1, string memory _datu2) public onlyOwner returns (uint256) {        
         formCount++;
         forms[formCount] = Form(formCount, _datu1, _datu2);        
         emit FormCreated(formCount, _datu1, _datu2);
+        return formCount;
     }
 
     function updateForm(uint256 _zenbakia, string memory _datu1, string memory _datu2) public onlyOwner {
