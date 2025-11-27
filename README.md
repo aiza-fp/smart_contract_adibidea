@@ -42,8 +42,8 @@ Kontratuaren ABI (Application Binary Interface) eta bytecode fitxategiak. Hauek 
 
 ### Python Script-a erabiltzeko:
 - Python 3.x
-- `web3` liburutegia: `pip install web3`
-- `eth-account` liburutegia: `pip install eth-account`
+- `web3` liburutegia: `pip install web3==7.14.0`
+- `eth-account` liburutegia: `pip install eth-account==0.13.7`
 - Ethereum nodo bat konektagarri (adibidez, Blockchain FP Euskadi sareko nodo bat)
 
 ### Web interfazea erabiltzeko:
